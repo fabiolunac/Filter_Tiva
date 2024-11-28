@@ -18,8 +18,8 @@
 #include "driverlib/pwm.h"
 #include "arm_math.h"
 
-#define SIGNAL_SIZE 200
-#define BLOCK_SIZE 20
+#define SIGNAL_SIZE 500
+#define BLOCK_SIZE 25
 #define SAMPLE_FREQUENCY 10000
 #define NUM_TAPS 41
 #define NUM_TAPS_ARRAY_SIZE 41
@@ -28,7 +28,6 @@
 
 uint32_t ui32SysClkFreq;
 uint32_t adcValue;
-uint32_t SampleFrequency = 10000;
 uint16_t index = 0;
 uint16_t index_pwm = 0;
 uint32_t ui32Load;
@@ -36,7 +35,7 @@ uint32_t ui32PWMClock;
 
 float signal_in [SIGNAL_SIZE];
 float signal_out[SIGNAL_SIZE];
-float signal_test[SIGNAL_SIZE];
+float valor_normalizado;
 
 float32_t signal_out_arm[SIGNAL_SIZE];
 
@@ -126,28 +125,28 @@ void configureTimer(void)
 
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
 
-    TimerLoadSet(TIMER0_BASE, TIMER_A, ui32SysClkFreq/SampleFrequency - 1);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, ui32SysClkFreq/SAMPLE_FREQUENCY - 1);
 
     TimerControlTrigger(TIMER0_BASE, TIMER_A, true);
+
+    IntEnable(INT_TIMER0A);
+
+    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
     TimerEnable(TIMER0_BASE, TIMER_A);
 }
 
-void ConfigurePWM(void)
+void configurePWM(void)
 {
 
-    // Habilitar o PWM e os módulos de GPIO
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_PWM0);
 
-    // PWM do clock
     PWMClockSet(PWM0_BASE, PWM_SYSCLK_DIV_64);
 
-    // Configuração do GPIO PG0 para PWM
     GPIOPinConfigure(GPIO_PF2_M0PWM2);
     GPIOPinTypePWM(GPIO_PORTF_BASE, GPIO_PIN_2);
 
-    // Clock do PWM e valor do LOAD
     ui32PWMClock = ui32SysClkFreq / 64; // 120MHz/64
 
     ui32Load = (ui32PWMClock/PWM_FREQUENCY) - 1; // 1875000/100000
@@ -163,12 +162,14 @@ void ConfigurePWM(void)
     PWMGenEnable(PWM0_BASE, PWM_GEN_1);
 }
 
-// interrupçao para alterar a largura de pulso do pwm
+
 void Timer0IntHandler(void)
 {
     TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
-    uint32_t duty = signal_test[index_pwm];
+    valor_normalizado = (float)signal_out[index_pwm]/4095;
+
+    uint32_t duty = ui32Load * valor_normalizado;
 
     PWMPulseWidthSet(PWM0_BASE, PWM_OUT_2, duty);
 
@@ -188,15 +189,11 @@ int main(void)
 
     IntMasterEnable();
 
-//    generate_signal(signal_in, SIGNAL_SIZE, SAMPLE_FREQUENCY);
-
-//    filter_FIR(signal_in, signal_out, firCoeffs32, SIGNAL_SIZE, NUM_TAPS_ARRAY_SIZE);
-//
-//    filter_ARM(signal_in, signal_out_arm, firCoeffs32, firStateF32, BLOCK_SIZE, NUM_TAPS, numBlocks);
-
     configureADC();
 
     configureTimer();
+
+    configurePWM();
 
     while(1)
     {
@@ -209,13 +206,13 @@ int main(void)
 
             ADCSequenceDataGet(ADC0_BASE, ADC_SEQUENCER, &adcValue);
 
-            signal_test[index++] = adcValue;
+            signal_in[index++] = adcValue;
 
             if(index >= SIGNAL_SIZE)
             {
-                filter_FIR(signal_test, signal_out, firCoeffs32, SIGNAL_SIZE, NUM_TAPS_ARRAY_SIZE);
+                filter_FIR(signal_in, signal_out, firCoeffs32, SIGNAL_SIZE, NUM_TAPS_ARRAY_SIZE);
 
-                filter_ARM(signal_test, signal_out_arm, firCoeffs32, firStateF32, BLOCK_SIZE, NUM_TAPS, numBlocks);
+                filter_ARM(signal_in, signal_out_arm, firCoeffs32, firStateF32, BLOCK_SIZE, NUM_TAPS, numBlocks);
 
                 index = 0;
             }
